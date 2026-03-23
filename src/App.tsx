@@ -17,7 +17,9 @@ import {
   FileSearch,
   CheckCircle2,
   Copy,
-  Printer
+  Printer,
+  Info,
+  ExternalLink
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -38,6 +40,7 @@ import {
   getDocFromServer,
   User 
 } from './firebase';
+import AdBanner from './components/AdBanner';
 
 interface Invoice {
   id: string;
@@ -54,7 +57,6 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [file, setFile] = useState<File | null>(null);
-  const [password, setPassword] = useState('');
   const [cnpj, setCnpj] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -122,9 +124,12 @@ export default function App() {
   }, [authReady]);
 
   const handleLogin = async () => {
+    console.log("Iniciando login com Google...");
     try {
-      await signInWithPopup(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider);
+      console.log("Login bem-sucedido:", result.user.email);
     } catch (err: any) {
+      console.error("Erro no login:", err);
       setError("Erro ao fazer login: " + err.message);
     }
   };
@@ -151,7 +156,7 @@ export default function App() {
       setError('Você precisa estar logado para buscar notas.');
       return;
     }
-    if (!file || !password || !cnpj) {
+    if (!file || !cnpj) {
       setError('Por favor, preencha todos os campos.');
       return;
     }
@@ -161,7 +166,6 @@ export default function App() {
 
     const formData = new FormData();
     formData.append('certificate', file);
-    formData.append('password', password);
     formData.append('cnpj', cnpj);
 
     try {
@@ -285,10 +289,12 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: user.uid, email: user.email }),
       });
-      const { id } = await response.json();
-      // In a real app, redirect to Stripe
-      alert("Redirecionando para o Stripe Checkout... (ID: " + id + ")");
-      // window.location.href = session.url;
+      const { url } = await response.json();
+      if (url) {
+        window.location.href = url;
+      } else {
+        throw new Error('Erro ao criar sessão de pagamento.');
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -379,6 +385,13 @@ export default function App() {
               <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5" />
               Começar agora com Google
             </button>
+
+            {error && (
+              <div className="mt-8 bg-red-50 border border-red-100 text-red-600 p-4 rounded-xl flex items-start gap-3 max-w-md mx-auto">
+                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                <p className="text-sm font-medium">{error}</p>
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-8">
@@ -406,9 +419,15 @@ export default function App() {
                 onClick={() => setStep('billing')}
                 className={`px-6 py-3 font-bold text-sm transition-all border-b-2 ${step === 'billing' ? 'border-orange-600 text-orange-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
               >
-                Plano {isPro ? 'Pro' : 'Grátis'}
+                {isPro ? 'Meu Plano' : 'Assinar Pro'}
               </button>
             </div>
+
+            {!isPro && (
+              <div className="my-6">
+                <AdBanner type="horizontal" />
+              </div>
+            )}
 
             <AnimatePresence mode="wait">
               {step === 'setup' && (
@@ -487,17 +506,6 @@ export default function App() {
                             )}
                           </div>
                         </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-semibold text-slate-700 mb-2">Senha do Certificado</label>
-                        <input
-                          type="password"
-                          placeholder="••••••••"
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-                        />
                       </div>
 
                       {error && (
@@ -707,41 +715,9 @@ export default function App() {
                     <p className="text-slate-500 text-lg">Automatize sua gestão fiscal e ganhe tempo.</p>
                   </div>
 
-                  <div className="grid md:grid-cols-2 gap-8">
-                    {/* Free Plan */}
-                    <div className="bg-white border-2 border-slate-200 rounded-3xl p-8 flex flex-col">
-                      <div className="mb-6">
-                        <h3 className="text-xl font-bold text-slate-900">Plano Grátis</h3>
-                        <p className="text-slate-500 text-sm">Para pequenos negócios</p>
-                      </div>
-                      <div className="mb-8">
-                        <span className="text-4xl font-black text-slate-900">R$ 0</span>
-                        <span className="text-slate-400 font-bold">/mês</span>
-                      </div>
-                      <ul className="space-y-4 mb-8 flex-grow">
-                        <li className="flex items-center gap-3 text-slate-600 text-sm">
-                          <CheckCircle2 className="text-emerald-500 w-5 h-5" />
-                          Busca de Notas na SEFAZ
-                        </li>
-                        <li className="flex items-center gap-3 text-slate-600 text-sm">
-                          <CheckCircle2 className="text-emerald-500 w-5 h-5" />
-                          Geração de DANFE (PDF)
-                        </li>
-                        <li className="flex items-center gap-3 text-slate-400 text-sm line-through">
-                          <AlertCircle className="w-5 h-5" />
-                          Extração de Chaves SPED
-                        </li>
-                      </ul>
-                      <button 
-                        disabled={!isPro}
-                        className={`w-full py-4 rounded-2xl font-bold transition-all ${!isPro ? 'bg-slate-100 text-slate-400' : 'bg-white border-2 border-slate-200 text-slate-700 hover:border-orange-600 hover:text-orange-600'}`}
-                      >
-                        {!isPro ? 'Plano Atual' : 'Mudar para Grátis'}
-                      </button>
-                    </div>
-
+                  <div className="flex justify-center">
                     {/* Pro Plan */}
-                    <div className="bg-white border-2 border-orange-600 rounded-3xl p-8 flex flex-col relative overflow-hidden shadow-xl shadow-orange-100">
+                    <div className="bg-white border-2 border-orange-600 rounded-3xl p-8 flex flex-col relative overflow-hidden shadow-xl shadow-orange-100 max-w-md w-full">
                       <div className="absolute top-0 right-0 bg-orange-600 text-white px-4 py-1 rounded-bl-xl text-xs font-bold uppercase tracking-widest">
                         Recomendado
                       </div>
@@ -756,15 +732,19 @@ export default function App() {
                       <ul className="space-y-4 mb-8 flex-grow">
                         <li className="flex items-center gap-3 text-slate-600 text-sm">
                           <CheckCircle2 className="text-emerald-500 w-5 h-5" />
-                          Tudo do plano Grátis
+                          Busca de Notas na SEFAZ
+                        </li>
+                        <li className="flex items-center gap-3 text-slate-600 text-sm">
+                          <CheckCircle2 className="text-emerald-500 w-5 h-5" />
+                          Geração de DANFE (PDF)
                         </li>
                         <li className="flex items-center gap-3 text-slate-600 text-sm">
                           <CheckCircle2 className="text-emerald-500 w-5 h-5" />
                           Extração Ilimitada de SPED
                         </li>
-                        <li className="flex items-center gap-3 text-slate-600 text-sm">
-                          <CheckCircle2 className="text-emerald-500 w-5 h-5" />
-                          Suporte Prioritário
+                        <li className="flex items-center gap-3 text-emerald-600 text-sm font-bold">
+                          <CheckCircle2 className="w-5 h-5" />
+                          Navegação sem anúncios
                         </li>
                         <li className="flex items-center gap-3 text-slate-600 text-sm">
                           <CheckCircle2 className="text-emerald-500 w-5 h-5" />

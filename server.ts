@@ -51,7 +51,7 @@ async function startServer() {
         client_reference_id: userId,
       });
 
-      res.json({ id: session.id });
+      res.json({ id: session.id, url: session.url });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -60,25 +60,16 @@ async function startServer() {
   // API: Mock SEFAZ Fetch (Real implementation would require complex SOAP/XML signing)
   app.post("/api/fetch-nfe", upload.single("certificate"), async (req, res) => {
     try {
-      const { password, cnpj } = req.body;
+      const { cnpj } = req.body;
       const certFile = req.file;
 
-      if (!certFile || !password || !cnpj) {
-        return res.status(400).json({ error: "Certificado, senha e CNPJ são obrigatórios." });
+      if (!certFile || !cnpj) {
+        return res.status(400).json({ error: "Certificado e CNPJ são obrigatórios." });
       }
 
+      // Simulação de processamento do certificado
       // Em uma implementação real, usaríamos o node-forge para extrair a chave privada e o certificado
       // para assinar a requisição SOAP para o webservice da SEFAZ (NFeDistribuicaoDFe).
-      
-      // Simulação de processamento do certificado
-      try {
-        const p12Der = certFile.buffer.toString('binary');
-        const p12Asn1 = forge.asn1.fromDer(p12Der);
-        const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, password);
-        // Se chegou aqui, a senha está correta
-      } catch (e) {
-        return res.status(401).json({ error: "Senha do certificado inválida ou arquivo corrompido." });
-      }
 
       // Simulando retorno da SEFAZ
       const mockInvoices = [
