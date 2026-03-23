@@ -1,0 +1,5 @@
+{
+  "name": "Meu XML",
+  "description": "Busca e gerenciamento de XMLs de notas fiscais de compra.",
+  "requestFramePermissions": []
+}
