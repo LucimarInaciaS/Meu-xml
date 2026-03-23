@@ -19,7 +19,9 @@ import {
   Copy,
   Printer,
   Info,
-  ExternalLink
+  ExternalLink,
+  RefreshCw,
+  Play
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -49,6 +51,7 @@ export default function App() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [step, setStep] = useState<'setup' | 'dashboard' | 'sped' | 'billing'>('setup');
   const [isPro, setIsPro] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
   
   // SPED State
   const [spedFile, setSpedFile] = useState<File | null>(null);
@@ -100,6 +103,13 @@ export default function App() {
     checkSub();
 
     const fetchInvoices = async () => {
+      if (demoMode) {
+        const localInvoices = localStorage.getItem('demo_invoices');
+        if (localInvoices) {
+          setInvoices(JSON.parse(localInvoices));
+        }
+        return;
+      }
       if (!supabase) return;
       const { data, error } = await supabase
         .from('invoices')
@@ -113,6 +123,8 @@ export default function App() {
     };
 
     fetchInvoices();
+
+    if (demoMode) return;
 
     // Realtime subscription
     const channel = supabase
@@ -175,7 +187,15 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => supabase?.auth.signOut();
+  const handleLogout = () => {
+    if (demoMode) {
+      setDemoMode(false);
+      setUser(null);
+      setStep('setup');
+      return;
+    }
+    supabase?.auth.signOut();
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -221,8 +241,23 @@ export default function App() {
         throw new Error(data.error || 'Erro ao buscar notas.');
       }
 
-      // Save fetched invoices to Supabase
-      if (supabase) {
+      // Save fetched invoices to Supabase or LocalStorage
+      if (demoMode) {
+        const updatedInvoices = [...invoices];
+        for (const inv of data.invoices) {
+          const existing = updatedInvoices.find(i => i.chNFe === inv.chNFe);
+          if (!existing) {
+            updatedInvoices.push({
+              ...inv,
+              id: Math.random().toString(36).substr(2, 9),
+              user_id: user.id,
+              created_at: new Date().toISOString()
+            });
+          }
+        }
+        setInvoices(updatedInvoices);
+        localStorage.setItem('demo_invoices', JSON.stringify(updatedInvoices));
+      } else if (supabase) {
         for (const inv of data.invoices) {
           const existing = invoices.find(i => i.chNFe === inv.chNFe);
           if (!existing) {
@@ -357,13 +392,24 @@ export default function App() {
 
   if (!authReady) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <Loader2 className="w-8 h-8 animate-spin text-orange-600" />
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-4">
+        <Loader2 className="w-8 h-8 animate-spin text-orange-600 mb-6" />
+        <p className="text-slate-500 text-sm mb-4">Carregando aplicativo...</p>
+        <button 
+          onClick={() => {
+            setDemoMode(true);
+            setUser({ id: 'demo-user', email: 'demo@example.com', user_metadata: { full_name: 'Usuário Demo' } });
+            setAuthReady(true);
+          }}
+          className="text-orange-600 hover:text-orange-700 font-semibold text-sm underline underline-offset-4"
+        >
+          Demorando muito? Entrar em Modo Demo
+        </button>
       </div>
     );
   }
 
-  if (!supabase) {
+  if (!supabase && !demoMode) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center border border-orange-100">
@@ -390,12 +436,29 @@ export default function App() {
               <li>Cole no menu Secrets do AI Studio</li>
             </ol>
           </div>
-          <button 
-            onClick={() => window.location.reload()}
-            className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-xl transition-all shadow-lg shadow-orange-200"
-          >
-            Já configurei, recarregar
-          </button>
+          <div className="flex flex-col gap-3">
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-xl transition-all shadow-lg shadow-orange-200 flex items-center justify-center gap-2"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Já configurei, recarregar
+            </button>
+            <button 
+              onClick={() => {
+                setDemoMode(true);
+                setUser({ id: 'demo-user', email: 'demo@example.com', user_metadata: { full_name: 'Usuário Demo' } });
+                setAuthReady(true);
+              }}
+              className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
+            >
+              <Play className="w-4 h-4" />
+              Usar Modo de Demonstração (Local)
+            </button>
+          </div>
+          <p className="mt-6 text-[10px] text-slate-400">
+            Dica: No menu Secrets, use exatamente os nomes <code className="text-slate-500">VITE_SUPABASE_URL</code> e <code className="text-slate-500">VITE_SUPABASE_ANON_KEY</code>.
+          </p>
         </div>
       </div>
     );
@@ -424,12 +487,27 @@ export default function App() {
               <li>Execute o script para criar as tabelas</li>
             </ol>
           </div>
-          <button 
-            onClick={() => window.location.reload()}
-            className="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-3 rounded-xl transition-all shadow-lg"
-          >
-            Recarregar Aplicativo
-          </button>
+          <div className="flex flex-col gap-3">
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-3 rounded-xl transition-all shadow-lg flex items-center justify-center gap-2"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Recarregar Aplicativo
+            </button>
+            <button 
+              onClick={() => {
+                setDemoMode(true);
+                setUser({ id: 'demo-user', email: 'demo@example.com', user_metadata: { full_name: 'Usuário Demo' } });
+                setAuthReady(true);
+                setConnectionError(null);
+              }}
+              className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
+            >
+              <Play className="w-4 h-4" />
+              Usar Modo de Demonstração (Local)
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -509,6 +587,12 @@ export default function App() {
           </div>
         ) : (
           <div className="space-y-8">
+            {demoMode && (
+              <div className="bg-orange-600 text-white text-center py-2 px-4 rounded-xl font-bold text-sm shadow-lg animate-pulse">
+                🚀 MODO DE DEMONSTRAÇÃO ATIVO - Seus dados estão sendo salvos apenas localmente neste navegador.
+              </div>
+            )}
+
             {/* Tabs */}
             <div className="flex border-b border-slate-200">
               <button 
