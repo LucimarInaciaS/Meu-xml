@@ -24,22 +24,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
-import { 
-  auth, 
-  db, 
-  googleProvider, 
-  signInWithPopup, 
-  onAuthStateChanged, 
-  collection, 
-  addDoc, 
-  query, 
-  where, 
-  onSnapshot, 
-  serverTimestamp,
-  doc,
-  getDocFromServer,
-  User 
-} from './firebase';
+import { supabase } from './supabase';
 import AdBanner from './components/AdBanner';
 
 interface Invoice {
@@ -49,17 +34,18 @@ interface Invoice {
   valor: number;
   data: string;
   status: string;
-  userId: string;
-  createdAt: any;
+  user_id: string;
+  created_at: string;
 }
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<any | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [cnpj, setCnpj] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [step, setStep] = useState<'setup' | 'dashboard' | 'sped' | 'billing'>('setup');
   const [isPro, setIsPro] = useState(false);
@@ -73,15 +59,26 @@ export default function App() {
   const spedInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
+    if (!supabase) {
+      setAuthReady(true);
+      return;
+    }
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
       setAuthReady(true);
     });
-    return () => unsubscribe();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setAuthReady(true);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
-    if (!user) {
+    if (!user || !supabase) {
       setInvoices([]);
       setIsPro(false);
       return;
@@ -89,34 +86,69 @@ export default function App() {
 
     // Check subscription status
     const checkSub = async () => {
-      const subDoc = await getDocFromServer(doc(db, 'subscriptions', user.uid));
-      if (subDoc.exists() && subDoc.data().status === 'active') {
+      if (!supabase) return;
+      const { data, error } = await supabase
+        .from('subscriptions')
+        .select('status')
+        .eq('user_id', user.id)
+        .single();
+      
+      if (data && data.status === 'active') {
         setIsPro(true);
       }
     };
     checkSub();
 
-    const q = query(collection(db, 'invoices'), where('userId', '==', user.uid));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Invoice));
-      setInvoices(docs.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()));
-    }, (err) => {
-      console.error("Firestore error:", err);
-    });
+    const fetchInvoices = async () => {
+      if (!supabase) return;
+      const { data, error } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('data', { ascending: false });
 
-    return () => unsubscribe();
+      if (data) {
+        setInvoices(data as Invoice[]);
+      }
+    };
+
+    fetchInvoices();
+
+    // Realtime subscription
+    const channel = supabase
+      .channel('invoices_changes')
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'invoices',
+        filter: `user_id=eq.${user.id}`
+      }, (payload) => {
+        fetchInvoices();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user]);
 
-  // Test connection to Firestore
+  // Test connection to Supabase
   useEffect(() => {
-    if (authReady) {
+    if (authReady && supabase) {
       const testConnection = async () => {
         try {
-          await getDocFromServer(doc(db, 'test', 'connection'));
-        } catch (error) {
-          if (error instanceof Error && error.message.includes('client is offline')) {
-            console.error("Please check your Firebase configuration.");
+          const { error } = await supabase.from('invoices').select('count', { count: 'exact', head: true }).limit(1);
+          if (error) {
+            if (error.code === 'PGRST116' || error.message.includes('not found')) {
+              setConnectionError("A tabela 'invoices' não foi encontrada. Por favor, execute o script SQL de migration no painel do Supabase.");
+            } else {
+              setConnectionError(`Erro de conexão com Supabase: ${error.message}`);
+            }
+            throw error;
           }
+          setConnectionError(null);
+        } catch (error: any) {
+          console.error("Supabase connection error:", error);
         }
       };
       testConnection();
@@ -124,17 +156,26 @@ export default function App() {
   }, [authReady]);
 
   const handleLogin = async () => {
+    if (!supabase) {
+      setError("Supabase não configurado. Por favor, adicione as chaves no menu Secrets.");
+      return;
+    }
     console.log("Iniciando login com Google...");
     try {
-      const result = await signInWithPopup(auth, googleProvider);
-      console.log("Login bem-sucedido:", result.user.email);
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin
+        }
+      });
+      if (error) throw error;
     } catch (err: any) {
       console.error("Erro no login:", err);
       setError("Erro ao fazer login: " + err.message);
     }
   };
 
-  const handleLogout = () => auth.signOut();
+  const handleLogout = () => supabase?.auth.signOut();
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -180,15 +221,16 @@ export default function App() {
         throw new Error(data.error || 'Erro ao buscar notas.');
       }
 
-      // Save fetched invoices to Firestore
-      for (const inv of data.invoices) {
-        const existing = invoices.find(i => i.chNFe === inv.chNFe);
-        if (!existing) {
-          await addDoc(collection(db, 'invoices'), {
-            ...inv,
-            userId: user.uid,
-            createdAt: serverTimestamp()
-          });
+      // Save fetched invoices to Supabase
+      if (supabase) {
+        for (const inv of data.invoices) {
+          const existing = invoices.find(i => i.chNFe === inv.chNFe);
+          if (!existing) {
+            await supabase.from('invoices').insert({
+              ...inv,
+              user_id: user.id
+            });
+          }
         }
       }
 
@@ -287,7 +329,7 @@ export default function App() {
       const response = await fetch('/api/create-checkout-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.uid, email: user.email }),
+        body: JSON.stringify({ userId: user.id, email: user.email }),
       });
       const { url } = await response.json();
       if (url) {
@@ -321,6 +363,78 @@ export default function App() {
     );
   }
 
+  if (!supabase) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center border border-orange-100">
+          <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <AlertCircle className="w-8 h-8 text-orange-600" />
+          </div>
+          <h1 className="text-2xl font-bold text-slate-900 mb-4">Configuração Necessária</h1>
+          <p className="text-slate-600 mb-8 leading-relaxed">
+            O Supabase ainda não foi configurado. Por favor, adicione as chaves 
+            <code className="bg-slate-100 px-2 py-1 rounded mx-1 text-sm font-mono">VITE_SUPABASE_URL</code> 
+            e 
+            <code className="bg-slate-100 px-2 py-1 rounded mx-1 text-sm font-mono">VITE_SUPABASE_ANON_KEY</code> 
+            no menu <span className="font-semibold">Secrets</span> do AI Studio.
+          </p>
+          <div className="bg-orange-50 p-4 rounded-xl text-left mb-8">
+            <h3 className="text-sm font-semibold text-orange-800 mb-2 flex items-center gap-2">
+              <Info className="w-4 h-4" />
+              Como configurar:
+            </h3>
+            <ol className="text-xs text-orange-700 space-y-2 list-decimal ml-4">
+              <li>Crie um projeto no Supabase</li>
+              <li>Vá em Project Settings &gt; API</li>
+              <li>Copie a URL e a anon key</li>
+              <li>Cole no menu Secrets do AI Studio</li>
+            </ol>
+          </div>
+          <button 
+            onClick={() => window.location.reload()}
+            className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-xl transition-all shadow-lg shadow-orange-200"
+          >
+            Já configurei, recarregar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (connectionError) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center border border-red-100">
+          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <AlertCircle className="w-8 h-8 text-red-600" />
+          </div>
+          <h1 className="text-2xl font-bold text-slate-900 mb-4">Erro de Conexão</h1>
+          <p className="text-slate-600 mb-8 leading-relaxed">
+            {connectionError}
+          </p>
+          <div className="bg-red-50 p-4 rounded-xl text-left mb-8">
+            <h3 className="text-sm font-semibold text-red-800 mb-2 flex items-center gap-2">
+              <Info className="w-4 h-4" />
+              Como resolver:
+            </h3>
+            <ol className="text-xs text-red-700 space-y-2 list-decimal ml-4">
+              <li>Acesse o painel do Supabase</li>
+              <li>Vá em <strong>SQL Editor</strong></li>
+              <li>Copie o conteúdo do arquivo de migration em <code className="bg-white px-1 rounded">/supabase/migrations/...</code></li>
+              <li>Execute o script para criar as tabelas</li>
+            </ol>
+          </div>
+          <button 
+            onClick={() => window.location.reload()}
+            className="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-3 rounded-xl transition-all shadow-lg"
+          >
+            Recarregar Aplicativo
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#1E293B] font-sans">
       {/* Header */}
@@ -337,11 +451,11 @@ export default function App() {
             {user ? (
               <div className="flex items-center gap-4">
                 <div className="hidden md:flex flex-col items-end">
-                  <span className="text-sm font-bold text-slate-900">{user.displayName}</span>
+                  <span className="text-sm font-bold text-slate-900">{user.user_metadata?.full_name || user.email}</span>
                   <span className="text-xs text-slate-500">{user.email}</span>
                 </div>
-                {user.photoURL ? (
-                  <img src={user.photoURL} alt="Profile" className="w-9 h-9 rounded-full border border-slate-200" referrerPolicy="no-referrer" />
+                {user.user_metadata?.avatar_url ? (
+                  <img src={user.user_metadata.avatar_url} alt="Profile" className="w-9 h-9 rounded-full border border-slate-200" referrerPolicy="no-referrer" />
                 ) : (
                   <div className="w-9 h-9 rounded-full bg-orange-100 flex items-center justify-center text-orange-600">
                     <UserIcon className="w-5 h-5" />
